@@ -1,0 +1,10 @@
+{
+  "description": "PhishScan empowers employees to detect phishing threats by allowing them to upload emails or files for analysis, ensuring enhanced security and peace of mind.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
