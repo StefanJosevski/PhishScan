@@ -1,4 +1,6 @@
 import { JSONFilePreset } from "lowdb/node";
+import path from "path";
+import { fileURLToPath } from "url";
 
 export type Scan = {
   id: number;
@@ -16,6 +18,13 @@ type Data = {
 
 const defaultData: Data = { scans: [], nextId: 1 };
 
-const db = await JSONFilePreset<Data>("phishscan-db.json", defaultData);
+// Resolve the db file relative to THIS file's location, not the current
+// working directory, so it's always written in the same place no matter
+// which folder the server is started from.
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const dbPath = path.join(__dirname, "..", "phishscan-db.json");
+
+const db = await JSONFilePreset<Data>(dbPath, defaultData);
 
 export default db;
