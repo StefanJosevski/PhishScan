@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { analyzeContent, type AnalysisResult, type Indicator } from "./analyzer";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 type View = "login" | "mfa" | "upload" | "scanning" | "high-risk" | "suspicious" | "safe" | "history" | "alerts" | "settings";
@@ -576,16 +577,18 @@ function MFAScreen({ onSuccess, onBack }: { onSuccess: () => void; onBack: () =>
 
 // ─── Upload Screen ─────────────────────────────────────────────────────────────
 function UploadScreen({
-  onScan, hc, reduceMotion,
+  onScan, hc, reduceMotion, recentScans,
 }: {
-  onScan: (result: ScanResult, filename: string) => void;
+  onScan: (result: ScanResult, filename: string, analysis: AnalysisResult) => void;
   hc: boolean;
   reduceMotion: boolean;
+  recentScans: { id: number; name: string; status: string; time: string }[];
 }) {
   const [tab, setTab] = useState<UploadTab>("file");
   const [dragOver, setDragOver] = useState(false);
-  const [droppedFile, setDroppedFile] = useState<string | null>(null);
+  const [droppedFile, setDroppedFile] = useState<File | null>(null);
   const [pasteText, setPasteText] = useState("");
+  const [scanning, setScanning] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const contentBg = hc ? "#111827" : "#F8FAFC";
   const cardBg = hc ? "#1F2937" : "white";
@@ -593,35 +596,59 @@ function UploadScreen({
   const textPrimary = hc ? "#F9FAFB" : "#111827";
   const textSecondary = hc ? "#9CA3AF" : "#64748B";
 
-  const RECENT = [
-    { name: "invoice_Q3_2026.pdf", status: "high-risk", time: "2 min ago" },
-    { name: "welcome_offer.eml", status: "high-risk", time: "14 min ago" },
-    { name: "board_minutes_sept.docx", status: "safe", time: "1 hr ago" },
-    { name: "shipping_update.msg", status: "safe", time: "3 hr ago" },
-  ];
+  const RECENT = recentScans;
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
     const f = e.dataTransfer.files[0];
-    if (f) setDroppedFile(f.name);
+    if (f) setDroppedFile(f);
   };
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
-    if (f) setDroppedFile(f.name);
+    if (f) setDroppedFile(f);
   };
 
-  const handleScan = () => {
-    const canScan = (tab === "file" && droppedFile) || (tab === "text" && pasteText.trim());
-    if (!canScan) return;
-    const filename = tab === "file" ? (droppedFile ?? "upload.txt") : "pasted-content.txt";
-    const r = Math.random();
-    const result: ScanResult = r < 0.4 ? "high-risk" : r < 0.7 ? "suspicious" : "safe";
-    onScan(result, filename);
+  // Text-based file types we can actually read and analyze the content of.
+  const READABLE_TYPES = [".eml", ".msg", ".txt"];
+
+  const readFileAsText = (file: File): Promise<string> =>
+    new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result ?? ""));
+      reader.onerror = () => resolve("");
+      reader.readAsText(file);
+    });
+
+  const handleScan = async () => {
+    const canScanNow = (tab === "file" && droppedFile) || (tab === "text" && pasteText.trim());
+    if (!canScanNow) return;
+
+    setScanning(true);
+    let content = "";
+    let filename = "pasted-content.txt";
+
+    if (tab === "text") {
+      content = pasteText;
+    } else if (droppedFile) {
+      filename = droppedFile.name;
+      const isReadable = READABLE_TYPES.some((ext) => filename.toLowerCase().endsWith(ext));
+      if (isReadable) {
+        content = await readFileAsText(droppedFile);
+      }
+      // For .pdf/.png/.jpg we can't read text content in-browser without an
+      // extra parsing library, so analysis falls back to filename-only signals
+      // and AnalysisResult.checkedContent will be false.
+    }
+
+    const analysis = analyzeContent(content, filename);
+    setScanning(false);
+    onScan(analysis.tier, filename, analysis);
   };
 
   const canScan = (tab === "file" && droppedFile) || (tab === "text" && pasteText.trim().length > 0);
+
 
   return (
     <div className="max-w-3xl mx-auto px-8 py-10">
@@ -659,7 +686,7 @@ function UploadScreen({
             onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
             onDragLeave={() => setDragOver(false)}
             onDrop={handleDrop}
-            aria-label={droppedFile ? `Selected file: ${droppedFile}. Click to change.` : "Click or drag and drop a file to upload"}
+            aria-label={droppedFile ? `Selected file: ${droppedFile.name}. Click to change.` : "Click or drag and drop a file to upload"}
             className="w-full flex flex-col items-center justify-center rounded-2xl mb-5 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 transition-all duration-200"
             style={{
               border: `2.5px dashed ${dragOver ? "#2563EB" : (droppedFile ? "#10B981" : (hc ? "#4B5563" : "#CBD5E1"))}`,
@@ -675,7 +702,7 @@ function UploadScreen({
                 <div className="flex items-center justify-center rounded-2xl mb-4" style={{ width: 56, height: 56, background: "#D1FAE5" }}>
                   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#059669" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
                 </div>
-                <p className="text-sm font-bold mb-1" style={{ color: "#065F46", fontFamily: "'JetBrains Mono', monospace" }}>{droppedFile}</p>
+                <p className="text-sm font-bold mb-1" style={{ color: "#065F46", fontFamily: "'JetBrains Mono', monospace" }}>{droppedFile.name}</p>
                 <p className="text-xs" style={{ color: "#059669" }}>File ready &mdash; click to replace</p>
               </>
             ) : (
@@ -749,9 +776,9 @@ function UploadScreen({
       <div>
         <h2 className="text-sm font-bold mb-3" style={{ color: textPrimary }}>Recent Scans</h2>
         <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${borderColor}` }}>
-          {RECENT.map((scan, i) => (
+          {RECENT.slice(0, 5).map((scan, i) => (
             <div
-              key={scan.name}
+              key={scan.id ?? scan.name}
               className="flex items-center gap-3 px-4 py-3.5"
               style={{ borderTop: i > 0 ? `1px solid ${hc ? "#1F2937" : "#F1F5F9"}` : "none", background: cardBg }}
             >
@@ -761,6 +788,11 @@ function UploadScreen({
               <span className="text-xs flex-shrink-0" style={{ color: textSecondary }}>{scan.time}</span>
             </div>
           ))}
+          {RECENT.length === 0 && (
+            <div className="px-4 py-6 text-center" style={{ background: cardBg }}>
+              <p className="text-xs" style={{ color: textSecondary }}>No scans yet — upload a file above to get started.</p>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -978,13 +1010,14 @@ const INTERACTION_NEXT_STEPS: Record<string, string[]> = {
 };
 
 function HighRiskScreen({
-  onBack, filename, hc, reduceMotion, onToast,
+  onBack, filename, hc, reduceMotion, onToast, indicators,
 }: {
   onBack: () => void;
   filename: string;
   hc: boolean;
   reduceMotion: boolean;
   onToast: (msg: string, type: "success" | "error" | "info") => void;
+  indicators?: Indicator[];
 }) {
   const [reported, setReported] = useState(false);
   const [interaction, setInteraction] = useState<InteractionChoice>(null);
@@ -1064,8 +1097,8 @@ function HighRiskScreen({
           <h2 id="why-flagged" className="text-base font-bold" style={{ color: textPrimary }}>Why this was flagged</h2>
         </div>
         <div className="flex flex-col gap-2.5">
-          {HIGH_RISK_INDICATORS.map((ind, i) => (
-            <ExpandableIndicator key={i} label={ind.label} plain={ind.plain} technical={ind.technical} severity={ind.severity} hc={hc} accentColor="red" />
+          {(indicators && indicators.length > 0 ? indicators : HIGH_RISK_INDICATORS).map((ind: any, i) => (
+            <ExpandableIndicator key={i} label={ind.label} plain={ind.plain ?? ind.explanation} technical={ind.technical} severity={ind.severity} hc={hc} accentColor="red" />
           ))}
         </div>
       </section>
@@ -1170,12 +1203,13 @@ function HighRiskScreen({
 
 // ─── Suspicious Screen ─────────────────────────────────────────────────────────
 function SuspiciousScreen({
-  onBack, filename, hc, onToast,
+  onBack, filename, hc, onToast, indicators,
 }: {
   onBack: () => void;
   filename: string;
   hc: boolean;
   onToast: (msg: string, type: "success" | "error" | "info") => void;
+  indicators?: Indicator[];
 }) {
   const [reported, setReported] = useState(false);
   const textPrimary = hc ? "#F9FAFB" : "#111827";
@@ -1250,8 +1284,8 @@ function SuspiciousScreen({
         </div>
         <p className="text-sm mb-4" style={{ color: textSecondary }}>None of these signals alone confirms a phishing attempt, but together they are worth verifying before you act.</p>
         <div className="flex flex-col gap-2.5">
-          {SUSPICIOUS_INDICATORS.map((ind, i) => (
-            <ExpandableIndicator key={i} label={ind.label} plain={ind.plain} technical={ind.technical} severity={ind.severity} hc={hc} accentColor="amber" />
+          {(indicators && indicators.length > 0 ? indicators : SUSPICIOUS_INDICATORS).map((ind: any, i) => (
+            <ExpandableIndicator key={i} label={ind.label} plain={ind.plain ?? ind.explanation} technical={ind.technical} severity={ind.severity} hc={hc} accentColor="amber" />
           ))}
         </div>
       </section>
@@ -1372,13 +1406,13 @@ function SafeScreen({
 }
 
 // ─── Scan History Screen ───────────────────────────────────────────────────────
-function HistoryScreen({ hc }: { hc: boolean }) {
+function HistoryScreen({ hc, recentScans }: { hc: boolean; recentScans: { id: number; name: string; status: string; time: string }[] }) {
   const [filter, setFilter] = useState<"all" | "high-risk" | "safe">("all");
   const textPrimary = hc ? "#F9FAFB" : "#111827";
   const textSecondary = hc ? "#9CA3AF" : "#64748B";
   const cardBg = hc ? "#1F2937" : "white";
   const borderColor = hc ? "#374151" : "#E2E8F0";
-  const items = HISTORY_ITEMS.filter((h) => filter === "all" || h.status === filter);
+  const items = recentScans.filter((h) => filter === "all" || h.status === filter);
 
   return (
     <div className="max-w-3xl mx-auto px-8 py-10">
@@ -1406,21 +1440,19 @@ function HistoryScreen({ hc }: { hc: boolean }) {
       </div>
 
       <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${borderColor}` }}>
-        <div className="grid px-5 py-3 text-xs font-bold uppercase tracking-wider" style={{ gridTemplateColumns: "1fr auto auto auto", gap: "1rem", background: hc ? "#111827" : "#F8FAFC", color: textSecondary, borderBottom: `1px solid ${borderColor}` }}>
-          <span>File</span><span>Result</span><span>Size</span><span>Date</span>
+        <div className="grid px-5 py-3 text-xs font-bold uppercase tracking-wider" style={{ gridTemplateColumns: "1fr auto auto", gap: "1rem", background: hc ? "#111827" : "#F8FAFC", color: textSecondary, borderBottom: `1px solid ${borderColor}` }}>
+          <span>File</span><span>Result</span><span>Date</span>
         </div>
         {items.map((item, i) => (
-          <div key={item.name} className="grid px-5 py-4 items-center" style={{ gridTemplateColumns: "1fr auto auto auto", gap: "1rem", background: cardBg, borderTop: i > 0 ? `1px solid ${hc ? "#111827" : "#F8FAFC"}` : "none" }}>
+          <div key={item.id} className="grid px-5 py-4 items-center" style={{ gridTemplateColumns: "1fr auto auto", gap: "1rem", background: cardBg, borderTop: i > 0 ? `1px solid ${hc ? "#111827" : "#F8FAFC"}` : "none" }}>
             <div className="flex items-center gap-3 min-w-0">
               <span className="flex items-center justify-center rounded-lg flex-shrink-0" style={{ width: 32, height: 32, background: hc ? "#374151" : "#F1F5F9" }} aria-hidden>{Icon.file}</span>
               <div className="min-w-0">
                 <p className="text-xs font-semibold truncate" style={{ fontFamily: "'JetBrains Mono', monospace", color: textPrimary }}>{item.name}</p>
-                <p className="text-xs" style={{ color: textSecondary }}>{item.user}</p>
               </div>
             </div>
             <StatusBadge status={item.status} />
-            <span className="text-xs" style={{ color: textSecondary, fontFamily: "'JetBrains Mono', monospace" }}>{item.size}</span>
-            <span className="text-xs whitespace-nowrap" style={{ color: textSecondary }}>{item.date}</span>
+            <span className="text-xs whitespace-nowrap" style={{ color: textSecondary }}>{item.time}</span>
           </div>
         ))}
         {items.length === 0 && (
@@ -1622,8 +1654,34 @@ export default function App() {
   const [activeNav, setActiveNav] = useState("upload");
   const [scanResult, setScanResult] = useState<ScanResult>("high-risk");
   const [scanFilename, setScanFilename] = useState("upload.txt");
+  const [scanAnalysis, setScanAnalysis] = useState<AnalysisResult | null>(null);
   const [toast, setToast] = useState<{ msg: string; type: "success" | "error" | "info" } | null>(null);
   const [settings, setSettings] = useState<AppSettings>({ fontSize: "standard", highContrast: false, reduceMotion: false });
+  const [recentScans, setRecentScans] = useState<{ id: number; name: string; status: string; time: string }[]>([]);
+
+  const API_BASE = "http://localhost:3001";
+
+  const refreshScans = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/scans`);
+      const data = await res.json();
+      setRecentScans(
+        data.map((s: any) => ({
+          id: s.id,
+          name: s.filename,
+          status: s.risk_tier,
+          time: new Date(s.created_at).toLocaleString(),
+        }))
+      );
+    } catch {
+      // Backend not running — fall back to an empty list rather than fake data.
+      setRecentScans([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshScans();
+  }, [refreshScans]);
 
   const { fontSize, highContrast: hc, reduceMotion } = settings;
   const fontSizePx = fontSize === "standard" ? 15 : fontSize === "large" ? 17 : 20;
@@ -1640,14 +1698,31 @@ export default function App() {
     else if (id === "settings") setView("settings");
   };
 
-  const handleScan = (result: ScanResult, filename: string) => {
+  const handleScan = (result: ScanResult, filename: string, analysis: AnalysisResult) => {
     setScanResult(result);
     setScanFilename(filename);
+    setScanAnalysis(analysis);
     setView("scanning");
   };
 
-  const handleScanDone = () => {
+  const handleScanDone = async () => {
     setView(scanResult);
+    try {
+      const res = await fetch(`${API_BASE}/api/scans`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename: scanFilename,
+          risk_tier: scanResult,
+          indicators: scanAnalysis?.indicators.map((i) => i.label) ?? [],
+          reported: false,
+        }),
+      });
+      await res.json();
+      refreshScans();
+    } catch {
+      // Backend not running — the app still works locally, it just won't persist this scan.
+    }
   };
 
   const handleLogout = () => {
@@ -1698,12 +1773,12 @@ export default function App() {
           <Sidebar activeNav={activeNav} onNav={handleNav} onLogout={handleLogout} hc={hc} />
           <main className="flex-1 overflow-y-auto" style={{ marginLeft: 240, minHeight: "100vh", background: contentBg }}>
             <TopBar crumb={crumbMap[view]} hc={hc} />
-            {view === "upload" && <UploadScreen onScan={handleScan} hc={hc} reduceMotion={reduceMotion} />}
+            {view === "upload" && <UploadScreen onScan={handleScan} hc={hc} reduceMotion={reduceMotion} recentScans={recentScans} />}
             {view === "scanning" && <ScanningScreen filename={scanFilename} onDone={handleScanDone} reduceMotion={reduceMotion} hc={hc} />}
-            {view === "high-risk" && <HighRiskScreen onBack={() => { setView("upload"); setActiveNav("upload"); }} filename={scanFilename} hc={hc} reduceMotion={reduceMotion} onToast={showToast} />}
-            {view === "suspicious" && <SuspiciousScreen onBack={() => { setView("upload"); setActiveNav("upload"); }} filename={scanFilename} hc={hc} onToast={showToast} />}
+            {view === "high-risk" && <HighRiskScreen onBack={() => { setView("upload"); setActiveNav("upload"); }} filename={scanFilename} hc={hc} reduceMotion={reduceMotion} onToast={showToast} indicators={scanAnalysis?.indicators} />}
+            {view === "suspicious" && <SuspiciousScreen onBack={() => { setView("upload"); setActiveNav("upload"); }} filename={scanFilename} hc={hc} onToast={showToast} indicators={scanAnalysis?.indicators} />}
             {view === "safe" && <SafeScreen onBack={() => { setView("upload"); setActiveNav("upload"); }} filename={scanFilename} hc={hc} />}
-            {view === "history" && <HistoryScreen hc={hc} />}
+            {view === "history" && <HistoryScreen hc={hc} recentScans={recentScans} />}
             {view === "alerts" && <AlertsScreen hc={hc} />}
             {view === "settings" && <SettingsScreen settings={settings} onSettings={setSettings} hc={hc} />}
           </main>
