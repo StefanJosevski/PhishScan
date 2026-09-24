@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import QRCode from "qrcode";
 import { analyzeContent, type AnalysisResult, type Indicator } from "./analyzer";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -6,6 +7,15 @@ type View = "login" | "mfa" | "upload" | "scanning" | "high-risk" | "suspicious"
 type ScanResult = "high-risk" | "suspicious" | "safe";
 type UploadTab = "file" | "text";
 type FontSize = "standard" | "large" | "xl";
+
+type CurrentUser = {
+  id: number;
+  name: string;
+  email: string;
+  role: string;
+  avatar: string | null;
+  totpEnabled: boolean;
+};
 
 interface AppSettings {
   fontSize: FontSize;
@@ -250,12 +260,13 @@ const NAV_ITEMS = [
 ];
 
 function Sidebar({
-  activeNav, onNav, onLogout, hc,
+  activeNav, onNav, onLogout, hc, currentUser,
 }: {
   activeNav: string;
   onNav: (id: string) => void;
   onLogout: () => void;
   hc: boolean;
+  currentUser: CurrentUser | null;
 }) {
   const bg = hc ? "#000000" : "#0F172A";
   const border = hc ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.06)";
@@ -310,10 +321,16 @@ function Sidebar({
       {/* User */}
       <div className="px-3 pb-4 pt-3" style={{ borderTop: `1px solid ${border}` }}>
         <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg" style={{ background: hc ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.04)" }}>
-          <div className="flex items-center justify-center rounded-full text-sm font-bold flex-shrink-0" style={{ width: 34, height: 34, background: "linear-gradient(135deg,#6366F1,#8B5CF6)", color: "white" }}>SK</div>
+          {currentUser?.avatar ? (
+            <img src={currentUser.avatar} alt="" className="rounded-full flex-shrink-0 object-cover" style={{ width: 34, height: 34 }} />
+          ) : (
+            <div className="flex items-center justify-center rounded-full text-sm font-bold flex-shrink-0" style={{ width: 34, height: 34, background: "linear-gradient(135deg,#6366F1,#8B5CF6)", color: "white" }}>
+              {currentUser ? currentUser.name.split(" ").map((p) => p[0]).slice(0, 2).join("").toUpperCase() : "?"}
+            </div>
+          )}
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-semibold truncate" style={{ color: "white" }}>Sarah Kim</p>
-            <p className="text-xs truncate" style={{ color: hc ? "#94A3B8" : "#64748B" }}>IT Security Analyst</p>
+            <p className="text-sm font-semibold truncate" style={{ color: "white" }}>{currentUser?.name ?? "Signed out"}</p>
+            <p className="text-xs truncate" style={{ color: hc ? "#94A3B8" : "#64748B" }}>{currentUser?.role ?? ""}</p>
           </div>
           <button
             onClick={onLogout}
@@ -355,20 +372,51 @@ function TopBar({ crumb, hc }: { crumb: string; hc: boolean }) {
 }
 
 // ─── Login Screen ─────────────────────────────────────────────────────────────
-function LoginScreen({ onSuccess }: { onSuccess: () => void }) {
+function LoginScreen({ onSuccess, onMfaRequired }: { onSuccess: (user: CurrentUser) => void; onMfaRequired: (userId: number) => void }) {
+  const [mode, setMode] = useState<"login" | "register">("register");
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const API_BASE = "http://localhost:3001";
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    if (mode === "register" && !name.trim()) { setError("Please enter your name."); return; }
     if (!email.trim()) { setError("Please enter your email address."); return; }
     if (!password) { setError("Please enter your password."); return; }
+
     setLoading(true);
-    setTimeout(() => { setLoading(false); onSuccess(); }, 900);
+    try {
+      const endpoint = mode === "login" ? "/api/login" : "/api/register";
+      const body = mode === "login" ? { email, password } : { name, email, password };
+      const res = await fetch(`${API_BASE}${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.error || "Something went wrong. Please try again.");
+        setLoading(false);
+        return;
+      }
+
+      if (data.mfaRequired) {
+        onMfaRequired(data.userId);
+        return;
+      }
+
+      onSuccess(data.user);
+    } catch {
+      setError("Couldn't reach the server. Make sure the backend is running (npm run server).");
+      setLoading(false);
+    }
   };
 
   return (
@@ -379,7 +427,7 @@ function LoginScreen({ onSuccess }: { onSuccess: () => void }) {
           <div className="flex items-center justify-center rounded-2xl mb-4" style={{ width: 56, height: 56, background: "linear-gradient(135deg,#2563EB 0%,#1D4ED8 100%)" }}>
             <span style={{ color: "white" }}><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></span>
           </div>
-          <h1 className="text-2xl font-bold tracking-tight text-gray-900">Sign in to PhishScan</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-gray-900">{mode === "login" ? "Sign in to PhishScan" : "Create your PhishScan account"}</h1>
           <p className="text-sm mt-1" style={{ color: "#64748B" }}>Protect your organisation from phishing attacks</p>
         </div>
 
@@ -390,6 +438,24 @@ function LoginScreen({ onSuccess }: { onSuccess: () => void }) {
               <div role="alert" className="flex items-center gap-2.5 px-4 py-3 rounded-xl mb-5 text-sm font-medium" style={{ background: "#FEF2F2", border: "1px solid #FECACA", color: "#DC2626" }}>
                 <span aria-hidden style={{ flexShrink: 0 }}>{Icon.warning}</span>
                 {error}
+              </div>
+            )}
+
+            {mode === "register" && (
+              <div className="mb-5">
+                <label htmlFor="login-name" className="block text-sm font-semibold mb-2" style={{ color: "#374151" }}>Full name</label>
+                <input
+                  id="login-name"
+                  type="text"
+                  autoComplete="name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="Jane Doe"
+                  className="w-full px-4 py-3 rounded-xl text-sm focus:outline-none transition-shadow duration-150"
+                  style={{ border: "1.5px solid #CBD5E1", color: "#0F172A", background: "white" }}
+                  onFocus={(e) => { e.target.style.border = "1.5px solid #2563EB"; e.target.style.boxShadow = "0 0 0 3px rgba(37,99,235,0.1)"; }}
+                  onBlur={(e) => { e.target.style.border = "1.5px solid #CBD5E1"; e.target.style.boxShadow = "none"; }}
+                />
               </div>
             )}
 
@@ -412,16 +478,18 @@ function LoginScreen({ onSuccess }: { onSuccess: () => void }) {
             <div className="mb-6">
               <div className="flex items-center justify-between mb-2">
                 <label htmlFor="login-password" className="block text-sm font-semibold" style={{ color: "#374151" }}>Password</label>
-                <button type="button" className="text-xs font-medium text-blue-600 hover:underline focus:outline-none focus-visible:underline">Forgot password?</button>
+                {mode === "login" && (
+                  <button type="button" className="text-xs font-medium text-blue-600 hover:underline focus:outline-none focus-visible:underline">Forgot password?</button>
+                )}
               </div>
               <div className="relative">
                 <input
                   id="login-password"
                   type={showPw ? "text" : "password"}
-                  autoComplete="current-password"
+                  autoComplete={mode === "login" ? "current-password" : "new-password"}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Enter your password"
+                  placeholder={mode === "login" ? "Enter your password" : "At least 6 characters"}
                   className="w-full px-4 py-3 pr-12 rounded-xl text-sm focus:outline-none transition-shadow duration-150"
                   style={{ border: "1.5px solid #CBD5E1", color: "#0F172A", background: "white" }}
                   onFocus={(e) => { e.target.style.border = "1.5px solid #2563EB"; e.target.style.boxShadow = "0 0 0 3px rgba(37,99,235,0.1)"; }}
@@ -448,13 +516,24 @@ function LoginScreen({ onSuccess }: { onSuccess: () => void }) {
               {loading ? (
                 <>
                   <svg className="animate-spin" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><circle cx="12" cy="12" r="10" strokeOpacity="0.25"/><path d="M12 2a10 10 0 0 1 10 10" /></svg>
-                  Signing in&hellip;
+                  {mode === "login" ? "Signing in…" : "Creating account…"}
                 </>
               ) : (
-                <><span aria-hidden>{Icon.shield}</span> Sign In</>
+                <><span aria-hidden>{Icon.shield}</span> {mode === "login" ? "Sign In" : "Create Account"}</>
               )}
             </button>
           </form>
+
+          <p className="text-center text-xs mt-5" style={{ color: "#64748B" }}>
+            {mode === "login" ? "Don't have an account? " : "Already have an account? "}
+            <button
+              type="button"
+              onClick={() => { setMode(mode === "login" ? "register" : "login"); setError(""); }}
+              className="font-semibold text-blue-600 hover:underline focus:outline-none focus-visible:underline"
+            >
+              {mode === "login" ? "Create one" : "Sign in"}
+            </button>
+          </p>
         </div>
 
         <p className="text-center text-xs mt-6" style={{ color: "#94A3B8" }}>
@@ -466,11 +545,36 @@ function LoginScreen({ onSuccess }: { onSuccess: () => void }) {
 }
 
 // ─── MFA Screen ───────────────────────────────────────────────────────────────
-function MFAScreen({ onSuccess, onBack }: { onSuccess: () => void; onBack: () => void }) {
+function MFAScreen({ userId, onSuccess, onBack }: { userId: number; onSuccess: (user: CurrentUser) => void; onBack: () => void }) {
   const [digits, setDigits] = useState(["", "", "", "", "", ""]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const refs = useRef<(HTMLInputElement | null)[]>([]);
+  const API_BASE = "http://localhost:3001";
+
+  const submitCode = async (code: string) => {
+    setLoading(true);
+    setError("");
+    try {
+      const res = await fetch(`${API_BASE}/api/verify-login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, code }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "Incorrect code. Please try again.");
+        setLoading(false);
+        setDigits(["", "", "", "", "", ""]);
+        refs.current[0]?.focus();
+        return;
+      }
+      onSuccess(data.user);
+    } catch {
+      setError("Couldn't reach the server. Make sure the backend is running (npm run server).");
+      setLoading(false);
+    }
+  };
 
   const handleChange = (i: number, val: string) => {
     if (!/^\d*$/.test(val)) return;
@@ -480,8 +584,7 @@ function MFAScreen({ onSuccess, onBack }: { onSuccess: () => void; onBack: () =>
     setError("");
     if (val && i < 5) refs.current[i + 1]?.focus();
     if (next.every((d) => d !== "") && next.join("").length === 6) {
-      setLoading(true);
-      setTimeout(() => { setLoading(false); onSuccess(); }, 800);
+      submitCode(next.join(""));
     }
   };
 
@@ -499,8 +602,7 @@ function MFAScreen({ onSuccess, onBack }: { onSuccess: () => void; onBack: () =>
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (digits.some((d) => !d)) { setError("Please enter all 6 digits."); return; }
-    setLoading(true);
-    setTimeout(() => { setLoading(false); onSuccess(); }, 800);
+    submitCode(digits.join(""));
   };
 
   return (
@@ -1528,16 +1630,153 @@ function AlertsScreen({ hc }: { hc: boolean }) {
 
 // ─── Settings Screen ───────────────────────────────────────────────────────────
 function SettingsScreen({
-  settings, onSettings, hc,
+  settings, onSettings, hc, currentUser, onUserUpdate, onToast,
 }: {
   settings: AppSettings;
   onSettings: (s: AppSettings) => void;
   hc: boolean;
+  currentUser: CurrentUser | null;
+  onUserUpdate: (u: CurrentUser) => void;
+  onToast: (msg: string, type: "success" | "error" | "info") => void;
 }) {
   const textPrimary = hc ? "#F9FAFB" : "#111827";
   const textSecondary = hc ? "#9CA3AF" : "#64748B";
   const cardBg = hc ? "#1F2937" : "white";
   const borderColor = hc ? "#374151" : "#E2E8F0";
+
+  const [editingProfile, setEditingProfile] = useState(false);
+  const [editName, setEditName] = useState(currentUser?.name ?? "");
+  const [editRole, setEditRole] = useState(currentUser?.role ?? "");
+  const [editAvatar, setEditAvatar] = useState<string | null>(currentUser?.avatar ?? null);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+  const API_BASE = "http://localhost:3001";
+
+  const startEditing = () => {
+    setEditName(currentUser?.name ?? "");
+    setEditRole(currentUser?.role ?? "");
+    setEditAvatar(currentUser?.avatar ?? null);
+    setEditingProfile(true);
+  };
+
+  const handleAvatarPick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => setEditAvatar(String(reader.result ?? ""));
+    reader.readAsDataURL(file);
+  };
+
+  const saveProfile = async () => {
+    if (!currentUser) return;
+    setSavingProfile(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/users/${currentUser.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: editName, role: editRole, avatar: editAvatar }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        onToast(data.error || "Failed to update profile.", "error");
+        setSavingProfile(false);
+        return;
+      }
+      onUserUpdate(data.user);
+      onToast("Profile updated.", "success");
+      setEditingProfile(false);
+    } catch {
+      onToast("Couldn't reach the server to save your profile.", "error");
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+
+  // ── Share-app QR code (encodes wherever this page is currently running) ──
+  const [shareQrDataUrl, setShareQrDataUrl] = useState("");
+  useEffect(() => {
+    QRCode.toDataURL(window.location.origin, { width: 200, margin: 1 })
+      .then(setShareQrDataUrl)
+      .catch(() => {});
+  }, []);
+
+  const [mfaSettingUp, setMfaSettingUp] = useState(false);
+  const [mfaSecret, setMfaSecret] = useState("");
+  const [mfaQrDataUrl, setMfaQrDataUrl] = useState("");
+  const [mfaCode, setMfaCode] = useState("");
+  const [mfaError, setMfaError] = useState("");
+  const [mfaBusy, setMfaBusy] = useState(false);
+
+  const startMfaSetup = async () => {
+    if (!currentUser) return;
+    setMfaBusy(true);
+    setMfaError("");
+    try {
+      const res = await fetch(`${API_BASE}/api/users/${currentUser.id}/2fa/setup`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        onToast(data.error || "Failed to start 2FA setup.", "error");
+        return;
+      }
+      setMfaSecret(data.secret);
+      const qr = await QRCode.toDataURL(data.otpauthUrl, { width: 220, margin: 1 });
+      setMfaQrDataUrl(qr);
+      setMfaSettingUp(true);
+      setMfaCode("");
+    } catch {
+      onToast("Couldn't reach the server to start 2FA setup.", "error");
+    } finally {
+      setMfaBusy(false);
+    }
+  };
+
+  const confirmMfaSetup = async () => {
+    if (!currentUser) return;
+    if (mfaCode.trim().length !== 6) {
+      setMfaError("Enter the 6-digit code from your authenticator app.");
+      return;
+    }
+    setMfaBusy(true);
+    setMfaError("");
+    try {
+      const res = await fetch(`${API_BASE}/api/users/${currentUser.id}/2fa/verify-setup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: mfaCode.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMfaError(data.error || "Incorrect code. Please try again.");
+        return;
+      }
+      onUserUpdate(data.user);
+      onToast("Two-factor authentication enabled.", "success");
+      setMfaSettingUp(false);
+    } catch {
+      setMfaError("Couldn't reach the server. Make sure the backend is running.");
+    } finally {
+      setMfaBusy(false);
+    }
+  };
+
+  const disableMfa = async () => {
+    if (!currentUser) return;
+    setMfaBusy(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/users/${currentUser.id}/2fa/disable`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        onToast(data.error || "Failed to disable 2FA.", "error");
+        return;
+      }
+      onUserUpdate(data.user);
+      onToast("Two-factor authentication turned off.", "info");
+    } catch {
+      onToast("Couldn't reach the server.", "error");
+    } finally {
+      setMfaBusy(false);
+    }
+  };
 
   const Section = ({ title, children }: { title: string; children: React.ReactNode }) => (
     <div className="rounded-2xl overflow-hidden mb-6" style={{ border: `1px solid ${borderColor}`, background: cardBg }}>
@@ -1607,26 +1846,182 @@ function SettingsScreen({
 
       <Section title="Account">
         <Row>
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-semibold mb-0.5" style={{ color: textPrimary }}>Sarah Kim</p>
-              <p className="text-xs" style={{ color: textSecondary }}>s.kim@acme.com &middot; IT Security Analyst</p>
+          {!editingProfile ? (
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                {currentUser?.avatar ? (
+                  <img src={currentUser.avatar} alt="" className="rounded-full object-cover flex-shrink-0" style={{ width: 40, height: 40 }} />
+                ) : (
+                  <div className="flex items-center justify-center rounded-full text-sm font-bold flex-shrink-0" style={{ width: 40, height: 40, background: "linear-gradient(135deg,#6366F1,#8B5CF6)", color: "white" }}>
+                    {currentUser ? currentUser.name.split(" ").map((p) => p[0]).slice(0, 2).join("").toUpperCase() : "?"}
+                  </div>
+                )}
+                <div>
+                  <p className="text-sm font-semibold mb-0.5" style={{ color: textPrimary }}>{currentUser?.name ?? "—"}</p>
+                  <p className="text-xs" style={{ color: textSecondary }}>{currentUser?.email ?? ""} &middot; {currentUser?.role ?? ""}</p>
+                </div>
+              </div>
+              <button
+                onClick={startEditing}
+                className="px-4 py-2 rounded-lg text-xs font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                style={{ background: hc ? "#374151" : "#F1F5F9", color: textSecondary, border: `1px solid ${borderColor}` }}
+              >
+                Edit profile
+              </button>
             </div>
-            <button className="px-4 py-2 rounded-lg text-xs font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500" style={{ background: hc ? "#374151" : "#F1F5F9", color: textSecondary, border: `1px solid ${borderColor}` }}>
-              Edit profile
-            </button>
-          </div>
+          ) : (
+            <div className="flex flex-col gap-4">
+              <div className="flex items-center gap-4">
+                {editAvatar ? (
+                  <img src={editAvatar} alt="" className="rounded-full object-cover flex-shrink-0" style={{ width: 56, height: 56 }} />
+                ) : (
+                  <div className="flex items-center justify-center rounded-full text-base font-bold flex-shrink-0" style={{ width: 56, height: 56, background: "linear-gradient(135deg,#6366F1,#8B5CF6)", color: "white" }}>
+                    {editName ? editName.split(" ").map((p) => p[0]).slice(0, 2).join("").toUpperCase() : "?"}
+                  </div>
+                )}
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => avatarInputRef.current?.click()}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                    style={{ background: hc ? "#374151" : "#F1F5F9", color: textPrimary, border: `1px solid ${borderColor}` }}
+                  >
+                    Change photo
+                  </button>
+                  <input ref={avatarInputRef} type="file" accept="image/*" onChange={handleAvatarPick} className="hidden" />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold mb-1.5" style={{ color: textSecondary }}>Full name</label>
+                <input
+                  type="text"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none"
+                  style={{ border: `1.5px solid ${borderColor}`, background: hc ? "#111827" : "white", color: textPrimary }}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold mb-1.5" style={{ color: textSecondary }}>Role / title</label>
+                <input
+                  type="text"
+                  value={editRole}
+                  onChange={(e) => setEditRole(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none"
+                  style={{ border: `1.5px solid ${borderColor}`, background: hc ? "#111827" : "white", color: textPrimary }}
+                />
+              </div>
+
+              <div className="flex gap-2 justify-end">
+                <button
+                  onClick={() => setEditingProfile(false)}
+                  disabled={savingProfile}
+                  className="px-4 py-2 rounded-lg text-xs font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                  style={{ background: hc ? "#374151" : "#F1F5F9", color: textSecondary, border: `1px solid ${borderColor}` }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={saveProfile}
+                  disabled={savingProfile}
+                  className="px-4 py-2 rounded-lg text-xs font-semibold text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                  style={{ background: savingProfile ? "#93C5FD" : "#2563EB" }}
+                >
+                  {savingProfile ? "Saving…" : "Save changes"}
+                </button>
+              </div>
+            </div>
+          )}
         </Row>
         <Row>
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-semibold mb-0.5" style={{ color: textPrimary }}>Two-factor authentication</p>
-              <p className="text-xs" style={{ color: textSecondary }}>TOTP authenticator app is active. Last used today.</p>
+          {!mfaSettingUp ? (
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-semibold mb-0.5" style={{ color: textPrimary }}>Two-factor authentication</p>
+                <p className="text-xs" style={{ color: textSecondary }}>
+                  {currentUser?.totpEnabled ? "Enabled with an authenticator app." : "Not yet set up for this account."}
+                </p>
+              </div>
+              {currentUser?.totpEnabled ? (
+                <div className="flex items-center gap-3">
+                  <span className="flex items-center gap-1.5 text-xs font-bold" style={{ color: "#059669" }}>
+                    <span aria-hidden>{Icon.check}</span> Active
+                  </span>
+                  <button
+                    onClick={disableMfa}
+                    disabled={mfaBusy}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                    style={{ background: hc ? "#374151" : "#F1F5F9", color: textSecondary, border: `1px solid ${borderColor}` }}
+                  >
+                    Disable
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={startMfaSetup}
+                  disabled={mfaBusy || !currentUser}
+                  className="px-4 py-2 rounded-lg text-xs font-semibold text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                  style={{ background: mfaBusy ? "#93C5FD" : "#2563EB" }}
+                >
+                  {mfaBusy ? "Starting…" : "Set up two-factor authentication"}
+                </button>
+              )}
             </div>
-            <span className="flex items-center gap-1.5 text-xs font-bold" style={{ color: "#059669" }}>
-              <span aria-hidden>{Icon.check}</span> Active
-            </span>
-          </div>
+          ) : (
+            <div className="flex flex-col gap-4">
+              <div>
+                <p className="text-sm font-semibold mb-1" style={{ color: textPrimary }}>Scan this code</p>
+                <p className="text-xs mb-3" style={{ color: textSecondary }}>Open Google Authenticator, Authy, or any authenticator app, and scan this QR code.</p>
+                {mfaQrDataUrl && (
+                  <img src={mfaQrDataUrl} alt="Scan with your authenticator app to set up two-factor authentication" className="rounded-lg mb-2" style={{ width: 180, height: 180, border: `1px solid ${borderColor}` }} />
+                )}
+                <p className="text-xs" style={{ color: textSecondary }}>
+                  Can't scan? Enter this code manually: <span style={{ fontFamily: "'JetBrains Mono', monospace", color: textPrimary }}>{mfaSecret}</span>
+                </p>
+              </div>
+
+              {mfaError && (
+                <div role="alert" className="px-3 py-2 rounded-lg text-xs font-medium" style={{ background: hc ? "#1a0000" : "#FEF2F2", border: `1px solid ${hc ? "#5a1212" : "#FECACA"}`, color: hc ? "#FCA5A5" : "#DC2626" }}>
+                  {mfaError}
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-semibold mb-1.5" style={{ color: textSecondary }}>Enter the 6-digit code from the app</label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={6}
+                  value={mfaCode}
+                  onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, ""))}
+                  placeholder="000000"
+                  className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none"
+                  style={{ border: `1.5px solid ${borderColor}`, background: hc ? "#111827" : "white", color: textPrimary, fontFamily: "'JetBrains Mono', monospace", letterSpacing: "0.2em" }}
+                />
+              </div>
+
+              <div className="flex gap-2 justify-end">
+                <button
+                  onClick={() => { setMfaSettingUp(false); setMfaError(""); }}
+                  disabled={mfaBusy}
+                  className="px-4 py-2 rounded-lg text-xs font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                  style={{ background: hc ? "#374151" : "#F1F5F9", color: textSecondary, border: `1px solid ${borderColor}` }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmMfaSetup}
+                  disabled={mfaBusy}
+                  className="px-4 py-2 rounded-lg text-xs font-semibold text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                  style={{ background: mfaBusy ? "#93C5FD" : "#2563EB" }}
+                >
+                  {mfaBusy ? "Verifying…" : "Confirm & enable"}
+                </button>
+              </div>
+            </div>
+          )}
         </Row>
       </Section>
 
@@ -1643,6 +2038,19 @@ function SettingsScreen({
             <span className="text-xs font-semibold" style={{ fontFamily: "'JetBrains Mono', monospace", color: "#059669" }}>Up to date (11 Sep 2026)</span>
           </div>
         </Row>
+        <Row>
+          <div className="flex items-center gap-4">
+            {shareQrDataUrl && (
+              <img src={shareQrDataUrl} alt="QR code linking to this PhishScan instance" style={{ width: 96, height: 96, border: `1px solid ${borderColor}`, borderRadius: 8 }} />
+            )}
+            <div>
+              <p className="text-sm font-semibold mb-0.5" style={{ color: textPrimary }}>Scan to open on your phone</p>
+              <p className="text-xs leading-relaxed" style={{ color: textSecondary }}>
+                Opens this exact page — {window.location.origin}
+              </p>
+            </div>
+          </div>
+        </Row>
       </Section>
     </div>
   );
@@ -1651,6 +2059,8 @@ function SettingsScreen({
 // ─── App (root) ───────────────────────────────────────────────────────────────
 export default function App() {
   const [view, setView] = useState<View>("login");
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  const [pendingMfaUserId, setPendingMfaUserId] = useState<number | null>(null);
   const [activeNav, setActiveNav] = useState("upload");
   const [scanResult, setScanResult] = useState<ScanResult>("high-risk");
   const [scanFilename, setScanFilename] = useState("upload.txt");
@@ -1728,6 +2138,7 @@ export default function App() {
   const handleLogout = () => {
     setView("login");
     setActiveNav("upload");
+    setCurrentUser(null);
   };
 
   const showToast = useCallback((msg: string, type: "success" | "error" | "info") => {
@@ -1764,13 +2175,24 @@ export default function App() {
       `}</style>
 
       {/* Login / MFA — no sidebar */}
-      {view === "login" && <LoginScreen onSuccess={() => setView("mfa")} />}
-      {view === "mfa" && <MFAScreen onSuccess={() => { setView("upload"); setActiveNav("upload"); }} onBack={() => setView("login")} />}
+      {view === "login" && (
+        <LoginScreen
+          onSuccess={(user) => { setCurrentUser(user); setView("upload"); setActiveNav("upload"); }}
+          onMfaRequired={(userId) => { setPendingMfaUserId(userId); setView("mfa"); }}
+        />
+      )}
+      {view === "mfa" && (
+        <MFAScreen
+          userId={pendingMfaUserId ?? 0}
+          onSuccess={(user) => { setCurrentUser(user); setPendingMfaUserId(null); setView("upload"); setActiveNav("upload"); }}
+          onBack={() => { setPendingMfaUserId(null); setView("login"); }}
+        />
+      )}
 
       {/* Authenticated layout */}
       {isAuth && (
         <div className="flex">
-          <Sidebar activeNav={activeNav} onNav={handleNav} onLogout={handleLogout} hc={hc} />
+          <Sidebar activeNav={activeNav} onNav={handleNav} onLogout={handleLogout} hc={hc} currentUser={currentUser} />
           <main className="flex-1 overflow-y-auto" style={{ marginLeft: 240, minHeight: "100vh", background: contentBg }}>
             <TopBar crumb={crumbMap[view]} hc={hc} />
             {view === "upload" && <UploadScreen onScan={handleScan} hc={hc} reduceMotion={reduceMotion} recentScans={recentScans} />}
@@ -1780,7 +2202,7 @@ export default function App() {
             {view === "safe" && <SafeScreen onBack={() => { setView("upload"); setActiveNav("upload"); }} filename={scanFilename} hc={hc} />}
             {view === "history" && <HistoryScreen hc={hc} recentScans={recentScans} />}
             {view === "alerts" && <AlertsScreen hc={hc} />}
-            {view === "settings" && <SettingsScreen settings={settings} onSettings={setSettings} hc={hc} />}
+            {view === "settings" && <SettingsScreen settings={settings} onSettings={setSettings} hc={hc} currentUser={currentUser} onUserUpdate={setCurrentUser} onToast={showToast} />}
           </main>
         </div>
       )}
