@@ -19,7 +19,7 @@
 .uid { font-size: 0.72rem; color: #94a3b8; margin-top: 0.3rem; }
 
 .step-bar { display: flex; gap: 0; margin-bottom: 2rem; }
-.step-bar span { flex: 1; padding: 0.4rem 0.8rem; font-size: 0.78rem; font-weight: 600;
+.step-bar span { flex: 1; padding: 0.4rem 0.8rem; font-size: 0.95rem; font-weight: 600;
                  background: #e2e8f0; color: #64748b; text-align: center;
                  border-right: 2px solid #f8fafc; }
 .step-bar span.active { background: #1e3a8a; color: #fff; }
