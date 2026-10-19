@@ -22,5 +22,5 @@
 .step-bar span { flex: 1; padding: 0.4rem 0.8rem; font-size: 0.78rem; font-weight: 600;
                  background: #e2e8f0; color: #64748b; text-align: center;
                  border-right: 2px solid #f8fafc; }
-.step-bar span.active { background: #2563eb; color: #fff; }
+.step-bar span.active { background: #1e3a8a; color: #fff; }
 .step-bar span.done   { background: #16a34a; color: #fff; }
