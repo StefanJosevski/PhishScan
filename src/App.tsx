@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import QRCode from "qrcode";
 import { analyzeContent, type AnalysisResult, type Indicator } from "./analyzer";
+import { trackScanStarted, trackScanCompleted } from "./analytics";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 type View = "login" | "mfa" | "upload" | "scanning" | "high-risk" | "suspicious" | "safe" | "history" | "alerts" | "settings";
@@ -728,6 +729,7 @@ function UploadScreen({
     if (!canScanNow) return;
 
     setScanning(true);
+        trackScanStarted(tab === "text" ? "text" : "file");
     let content = "";
     let filename = "pasted-content.txt";
 
@@ -746,6 +748,12 @@ function UploadScreen({
 
     const analysis = analyzeContent(content, filename);
     setScanning(false);
+        trackScanCompleted({
+      risk_tier: analysis.tier,
+      score: analysis.score,
+      indicator_count: analysis.indicators.length,
+      input_type: tab === "text" ? "text" : "file",
+    });
     onScan(analysis.tier, filename, analysis);
   };
 
