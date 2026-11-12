@@ -5,8 +5,19 @@ import { authenticator } from "otplib";
 import db, { type Scan, type User } from "./db";
 
 const app = express();
-app.use(cors());
+// In production, set ALLOWED_ORIGIN to the website address (comma-separated for several).
+// If it is not set (local development), any origin is allowed.
+const allowedOrigins = (process.env.ALLOWED_ORIGIN ?? "")
+  .split(",")
+  .map((o) => o.trim().replace(/\/+$/, ""))
+  .filter(Boolean);
+app.use(cors(allowedOrigins.length > 0 ? { origin: allowedOrigins } : undefined));
 app.use(express.json({ limit: "3mb" })); // raised limit so a base64 avatar upload fits
+
+// Simple check that the server is awake (also useful for hosting dashboards)
+app.get("/api/health", (_req, res) => {
+  res.json({ ok: true });
+});
 
 type NewScanInput = {
   filename: string;
@@ -327,5 +338,5 @@ app.patch("/api/users/:id", async (req, res) => {
   }
 });
 
-const PORT = 3001;
+const PORT = Number(process.env.PORT) || 3001;
 app.listen(PORT, () => console.log(`PhishScan API running on http://localhost:${PORT}`));

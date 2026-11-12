@@ -382,7 +382,7 @@ function LoginScreen({ onSuccess, onMfaRequired }: { onSuccess: (user: CurrentUs
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const API_BASE = "http://localhost:3001";
+    const API_BASE = (import.meta.env.VITE_API_URL ?? "http://localhost:3001").replace(/\/+$/, "");
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -551,7 +551,7 @@ function MFAScreen({ userId, onSuccess, onBack }: { userId: number; onSuccess: (
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const refs = useRef<(HTMLInputElement | null)[]>([]);
-  const API_BASE = "http://localhost:3001";
+     const API_BASE = (import.meta.env.VITE_API_URL ?? "http://localhost:3001").replace(/\/+$/, "");
 
   const submitCode = async (code: string) => {
     setLoading(true);
@@ -1663,7 +1663,7 @@ function SettingsScreen({
   const [editAvatar, setEditAvatar] = useState<string | null>(currentUser?.avatar ?? null);
   const [savingProfile, setSavingProfile] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement>(null);
-  const API_BASE = "http://localhost:3001";
+     const API_BASE = (import.meta.env.VITE_API_URL ?? "http://localhost:3001").replace(/\/+$/, "");
 
   const startEditing = () => {
     setEditName(currentUser?.name ?? "");
@@ -2082,8 +2082,8 @@ export default function App() {
   const [settings, setSettings] = useState<AppSettings>({ fontSize: "standard", highContrast: false, reduceMotion: false });
   const [recentScans, setRecentScans] = useState<{ id: number; name: string; status: string; time: string }[]>([]);
 
-  const API_BASE = "http://localhost:3001";
-
+   const API_BASE = (import.meta.env.VITE_API_URL ?? "http://localhost:3001").replace(/\/+$/, "");
+   
   const refreshScans = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE}/api/scans`);
