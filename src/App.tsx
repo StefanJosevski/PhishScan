@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import QRCode from "qrcode";
-import { analyzeContent, type AnalysisResult, type Indicator } from "./analyzer";
+import { analyzeContent, mergeWithAi, type AnalysisResult, type Indicator } from "./analyzer";
+import { fetchAiReview } from "./ai";
+import GeminiPanel from "./GeminiPanel";
 import { trackScanStarted, trackScanCompleted } from "./analytics";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -682,7 +684,7 @@ function MFAScreen({ userId, onSuccess, onBack }: { userId: number; onSuccess: (
 function UploadScreen({
   onScan, hc, reduceMotion, recentScans,
 }: {
-  onScan: (result: ScanResult, filename: string, analysis: AnalysisResult) => void;
+  onScan: (result: ScanResult, filename: string, analysis: AnalysisResult, content: string) => void;
   hc: boolean;
   reduceMotion: boolean;
   recentScans: { id: number; name: string; status: string; time: string }[];
@@ -746,7 +748,9 @@ function UploadScreen({
       // and AnalysisResult.checkedContent will be false.
     }
 
-    const analysis = analyzeContent(content, filename);
+    const baseAnalysis = analyzeContent(content, filename);
+    const aiReview = await fetchAiReview(content);
+    const analysis = mergeWithAi(baseAnalysis, aiReview);
     setScanning(false);
     trackScanCompleted({
       risk_tier: analysis.tier,
@@ -754,7 +758,7 @@ function UploadScreen({
       indicator_count: analysis.indicators.length,
       input_type: tab === "text" ? "text" : "file",
     });
-    onScan(analysis.tier, filename, analysis);
+    onScan(analysis.tier, filename, analysis, content);
   };
 
   const canScan = (tab === "file" && droppedFile) || (tab === "text" && pasteText.trim().length > 0);
@@ -872,7 +876,7 @@ function UploadScreen({
       </div>
       <button
         onClick={handleScan}
-        disabled={!canScan}
+        disabled={!canScan || scanning}
         className="w-full flex items-center justify-center gap-2.5 py-3.5 rounded-xl text-sm font-bold text-white mb-10 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
         style={{
           background: canScan ? "linear-gradient(135deg,#2563EB 0%,#1D4ED8 100%)" : (hc ? "#374151" : "#E2E8F0"),
@@ -884,7 +888,7 @@ function UploadScreen({
         aria-disabled={!canScan}
       >
         <span aria-hidden>{Icon.shield}</span>
-        {canScan ? "Scan for Phishing" : (tab === "file" ? "Add a file to scan" : "Paste content to scan")}
+        {scanning ? "Scanning…" : canScan ? "Scan for Phishing" : (tab === "file" ? "Add a file to scan" : "Paste content to scan")}
       </button>
 
       {/* Recent scans */}
@@ -1125,7 +1129,7 @@ const INTERACTION_NEXT_STEPS: Record<string, string[]> = {
 };
 
 function HighRiskScreen({
-  onBack, filename, hc, reduceMotion, onToast, indicators,
+  onBack, filename, hc, reduceMotion, onToast, indicators, emailText, aiSummary,
 }: {
   onBack: () => void;
   filename: string;
@@ -1133,6 +1137,8 @@ function HighRiskScreen({
   reduceMotion: boolean;
   onToast: (msg: string, type: "success" | "error" | "info") => void;
   indicators?: Indicator[];
+  emailText: string;
+  aiSummary?: string;
 }) {
   const [reported, setReported] = useState(false);
   const [interaction, setInteraction] = useState<InteractionChoice>(null);
@@ -1180,6 +1186,7 @@ function HighRiskScreen({
         <span className="text-xs font-medium flex-1 truncate" style={{ fontFamily: "'JetBrains Mono', monospace", color: textPrimary }}>{filename}</span>
         <span className="text-xs flex-shrink-0" style={{ color: textSecondary }}>Scanned just now</span>
       </div>
+      <GeminiPanel emailText={emailText} summary={aiSummary} hc={hc} />
 
       {/* ── Section 1: What to do ── */}
       <section aria-labelledby="what-to-do" className="mb-7">
@@ -1318,13 +1325,15 @@ function HighRiskScreen({
 
 // ─── Suspicious Screen ─────────────────────────────────────────────────────────
 function SuspiciousScreen({
-  onBack, filename, hc, onToast, indicators,
+  onBack, filename, hc, onToast, indicators, emailText, aiSummary,
 }: {
   onBack: () => void;
   filename: string;
   hc: boolean;
   onToast: (msg: string, type: "success" | "error" | "info") => void;
   indicators?: Indicator[];
+  emailText: string;
+  aiSummary?: string;
 }) {
   const [reported, setReported] = useState(false);
   const textPrimary = hc ? "#F9FAFB" : "#111827";
@@ -1366,6 +1375,7 @@ function SuspiciousScreen({
         <span className="text-xs font-medium flex-1 truncate" style={{ fontFamily: "'JetBrains Mono', monospace", color: textPrimary }}>{filename}</span>
         <span className="text-xs flex-shrink-0" style={{ color: textSecondary }}>Scanned just now</span>
       </div>
+      <GeminiPanel emailText={emailText} summary={aiSummary} hc={hc} />
 
       {/* ── Section 1: Be cautious ── */}
       <section aria-labelledby="be-cautious" className="mb-7">
@@ -1450,11 +1460,13 @@ function SuspiciousScreen({
 
 // ─── Safe / No Threats Detected Screen ────────────────────────────────────────
 function SafeScreen({
-  onBack, filename, hc,
+  onBack, filename, hc, emailText, aiSummary,
 }: {
   onBack: () => void;
   filename: string;
   hc: boolean;
+  emailText: string;
+  aiSummary?: string;
 }) {
   const textPrimary = hc ? "#F9FAFB" : "#111827";
   const textSecondary = hc ? "#9CA3AF" : "#64748B";
@@ -1486,6 +1498,7 @@ function SafeScreen({
         <span className="text-xs font-medium flex-1 truncate" style={{ fontFamily: "'JetBrains Mono', monospace", color: textPrimary }}>{filename}</span>
         <span className="text-xs flex-shrink-0" style={{ color: textSecondary }}>Scanned just now</span>
       </div>
+      <GeminiPanel emailText={emailText} summary={aiSummary} hc={hc} />
 
       {/* What was checked */}
       <div className="rounded-2xl overflow-hidden mb-6" style={{ border: `1px solid ${hc ? "#14532d" : "#D1FAE5"}` }}>
@@ -2078,6 +2091,7 @@ export default function App() {
   const [scanResult, setScanResult] = useState<ScanResult>("high-risk");
   const [scanFilename, setScanFilename] = useState("upload.txt");
   const [scanAnalysis, setScanAnalysis] = useState<AnalysisResult | null>(null);
+  const [scanContent, setScanContent] = useState("");
   const [toast, setToast] = useState<{ msg: string; type: "success" | "error" | "info" } | null>(null);
   const [settings, setSettings] = useState<AppSettings>({ fontSize: "standard", highContrast: false, reduceMotion: false });
   const [recentScans, setRecentScans] = useState<{ id: number; name: string; status: string; time: string }[]>([]);
@@ -2121,7 +2135,8 @@ export default function App() {
     else if (id === "settings") setView("settings");
   };
 
-  const handleScan = (result: ScanResult, filename: string, analysis: AnalysisResult) => {
+  const handleScan = (result: ScanResult, filename: string, analysis: AnalysisResult, content: string) => {
+    setScanContent(content);
     setScanResult(result);
     setScanFilename(filename);
     setScanAnalysis(analysis);
@@ -2210,9 +2225,9 @@ export default function App() {
             <TopBar crumb={crumbMap[view]} hc={hc} />
             {view === "upload" && <UploadScreen onScan={handleScan} hc={hc} reduceMotion={reduceMotion} recentScans={recentScans} />}
             {view === "scanning" && <ScanningScreen filename={scanFilename} onDone={handleScanDone} reduceMotion={reduceMotion} hc={hc} />}
-            {view === "high-risk" && <HighRiskScreen onBack={() => { setView("upload"); setActiveNav("upload"); }} filename={scanFilename} hc={hc} reduceMotion={reduceMotion} onToast={showToast} indicators={scanAnalysis?.indicators} />}
-            {view === "suspicious" && <SuspiciousScreen onBack={() => { setView("upload"); setActiveNav("upload"); }} filename={scanFilename} hc={hc} onToast={showToast} indicators={scanAnalysis?.indicators} />}
-            {view === "safe" && <SafeScreen onBack={() => { setView("upload"); setActiveNav("upload"); }} filename={scanFilename} hc={hc} />}
+            {view === "high-risk" && <HighRiskScreen onBack={() => { setView("upload"); setActiveNav("upload"); }} filename={scanFilename} hc={hc} reduceMotion={reduceMotion} onToast={showToast} indicators={scanAnalysis?.indicators} emailText={scanContent} aiSummary={scanAnalysis?.aiSummary} />}
+            {view === "suspicious" && <SuspiciousScreen onBack={() => { setView("upload"); setActiveNav("upload"); }} filename={scanFilename} hc={hc} onToast={showToast} indicators={scanAnalysis?.indicators} emailText={scanContent} aiSummary={scanAnalysis?.aiSummary} />}
+            {view === "safe" && <SafeScreen onBack={() => { setView("upload"); setActiveNav("upload"); }} filename={scanFilename} hc={hc} emailText={scanContent} aiSummary={scanAnalysis?.aiSummary} />}
             {view === "history" && <HistoryScreen hc={hc} recentScans={recentScans} />}
             {view === "alerts" && <AlertsScreen hc={hc} />}
             {view === "settings" && <SettingsScreen settings={settings} onSettings={setSettings} hc={hc} currentUser={currentUser} onUserUpdate={setCurrentUser} onToast={showToast} />}

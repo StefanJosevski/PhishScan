@@ -1,10 +1,13 @@
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import bcrypt from "bcryptjs";
 import { authenticator } from "otplib";
 import db, { type Scan, type User } from "./db";
+import { reviewWithGemini, chatWithGemini } from "./gemini";
 
 const app = express();
+app.set("trust proxy", 1);
 // In production, set ALLOWED_ORIGIN to the website address (comma-separated for several).
 // If it is not set (local development), any origin is allowed.
 const allowedOrigins = (process.env.ALLOWED_ORIGIN ?? "")
@@ -17,6 +20,56 @@ app.use(express.json({ limit: "3mb" })); // raised limit so a base64 avatar uplo
 // Simple check that the server is awake (also useful for hosting dashboards)
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
+});
+
+// Limit AI scans per visitor so the Gemini key can't be drained
+const aiHits = new Map<string, number[]>();
+function aiRateLimited(ip: string): boolean {
+  const now = Date.now();
+  const recent = (aiHits.get(ip) ?? []).filter((t) => now - t < 60_000);
+  if (recent.length >= 15) {
+    aiHits.set(ip, recent);
+    return true;
+  }
+  recent.push(now);
+  aiHits.set(ip, recent);
+  return false;
+}
+
+// Ask Gemini for a second opinion on the pasted/uploaded email text
+app.post("/api/analyze", async (req, res) => {
+  const text = req.body?.text;
+  if (typeof text !== "string" || text.trim() === "") {
+    return res.status(400).json({ error: "'text' is required." });
+  }
+  if (aiRateLimited(req.ip ?? "unknown")) {
+    return res.status(429).json({ error: "Too many AI scans. Please wait a minute and try again." });
+  }
+  try {
+    const review = await reviewWithGemini(text);
+    res.json(review);
+  } catch (err) {
+    console.error("POST /api/analyze failed:", err instanceof Error ? err.message : "unknown error");
+    res.status(502).json({ error: "AI review is unavailable right now." });
+  }
+});
+
+// Follow-up questions about a scanned email
+app.post("/api/chat", async (req, res) => {
+  const { text, messages } = req.body ?? {};
+  if (typeof text !== "string" || text.trim() === "" || !Array.isArray(messages) || messages.length === 0) {
+    return res.status(400).json({ error: "'text' and 'messages' are required." });
+  }
+  if (aiRateLimited(req.ip ?? "unknown")) {
+    return res.status(429).json({ error: "Too many AI messages. Please wait a minute and try again." });
+  }
+  try {
+    const reply = await chatWithGemini(text, messages);
+    res.json({ reply });
+  } catch (err) {
+    console.error("POST /api/chat failed:", err instanceof Error ? err.message : "unknown error");
+    res.status(502).json({ error: "AI chat is unavailable right now." });
+  }
 });
 
 type NewScanInput = {

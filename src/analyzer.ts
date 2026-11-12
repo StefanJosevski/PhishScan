@@ -16,6 +16,7 @@ export type AnalysisResult = {
   score: number;
   indicators: Indicator[];
   checkedContent: boolean; // false if we only had a filename to go on
+  aiSummary?: string; // Gemini's plain-language verdict, when available
 };
 
 const URGENCY_PHRASES = [
@@ -126,5 +127,25 @@ export function analyzeContent(rawText: string, filename: string): AnalysisResul
     score,
     indicators,
     checkedContent: rawText.trim().length > 0,
+  };
+}
+
+// Combines the rule-based result with Gemini's opinion. The AI can raise the
+// risk level but never lower it, and its reasons are added to the list.
+export function mergeWithAi(
+  base: AnalysisResult,
+  ai: { tier: RiskTier; summary: string; indicators: Indicator[] } | null
+): AnalysisResult {
+  if (!ai) return base;
+  const rank: Record<RiskTier, number> = { safe: 0, suspicious: 1, "high-risk": 2 };
+  const tier = rank[ai.tier] > rank[base.tier] ? ai.tier : base.tier;
+  const score =
+    tier === base.tier ? base.score : Math.max(base.score, tier === "high-risk" ? 50 : 20);
+  return {
+    ...base,
+    tier,
+    score,
+    aiSummary: ai.summary && rank[ai.tier] >= rank[tier] ? ai.summary : undefined,
+    indicators: [...base.indicators, ...ai.indicators],
   };
 }
